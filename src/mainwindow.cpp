@@ -1,6 +1,7 @@
+#include <QDirIterator>
 #include <QFileDialog>
-#include <QtConcurrent/QtConcurrent>
 #include <QScrollBar>
+#include <QtConcurrent/QtConcurrentRun>
 #include "mainwindow.h"
 #include "comparison.h"
 
@@ -87,7 +88,9 @@ void MainWindow::loadExtensions()
         QString line = text.readLine();
         if(line.startsWith(QStringLiteral(";")) || line.isEmpty())
             continue;
-        _extensionList << line.replace(QRegExp("\\*?\\."), "*.").split(QStringLiteral(" "));
+
+        static QRegularExpression regex("\\*?\\.");
+        _extensionList << line.replace(regex, "*.").split(QStringLiteral(" "));
         addStatusMessage(line.remove(QStringLiteral("*")));
     }
     file.close();
@@ -179,7 +182,7 @@ void MainWindow::on_findDuplicates_clicked()
         ui->statusBox->append(QStringLiteral("\nSearching for videos..."));
         ui->statusBar->setVisible(true);
 
-        for(const auto &video : _videoList)                     //new search: delete videos from previous search
+        for(const auto &video : std::as_const(_videoList))                    //new search: delete videos from previous search
             delete video;
         _videoList.clear();
         _everyVideo.clear();
@@ -210,7 +213,7 @@ void MainWindow::on_findDuplicates_clicked()
         Comparison comparison(_videoList, _prefs);
         if(foldersToSearch != _previousRunFolders || _prefs._thumbnails != _previousRunThumbnails)
         {
-            QFuture<void> future = QtConcurrent::run(&comparison, &Comparison::reportMatchingVideos);   //run in background
+            QFuture<void> future = QtConcurrent::run(std::bind(&Comparison::reportMatchingVideos, &comparison));   //run in background
             comparison.exec();          //open dialog, but if it is closed while reportMatchingVideos() still running...
             QApplication::setOverrideCursor(Qt::WaitCursor);
             future.waitForFinished();   //...must wait until finished (crash when going out of scope destroys instance)
@@ -284,7 +287,8 @@ void MainWindow::processVideos()
     setup.populateMetadatas(_everyVideo);
 //Do batch cache retrieval here eventually
     QThreadPool threadPool;
-    for(const auto &videoTask : _everyVideo.values())
+
+    for(const auto &videoTask : std::as_const(_everyVideo))
     {
         if(_userPressedStop)
         {
@@ -319,7 +323,7 @@ void MainWindow::videoSummary()
                                                                              .arg(_everyVideo.count()));
         addStatusMessage(QStringLiteral("\nThe following %1 video(s) could not be added due to errors:")
                          .arg(_rejectedVideos.count()));
-        for(const auto &filename : _rejectedVideos)
+        for(const auto &filename : std::as_const(_rejectedVideos))
             addStatusMessage(filename);
     }
     _rejectedVideos.clear();
@@ -333,16 +337,19 @@ void MainWindow::addStatusMessage(const QString &message) const
 
 void MainWindow::addVideo(Video *addMe)
 {
-    addStatusMessage(QStringLiteral("[%1] %2 - %3 - %4").arg(QTime::currentTime().toString()).arg( QDir::toNativeSeparators(addMe->filename)).arg( addMe->cachedMetadata).arg( addMe->cachedCaptures));
+    addStatusMessage(QStringLiteral("[%1] %2 - %3 - %4")
+        .arg(QTime::currentTime().toString(), QDir::toNativeSeparators(addMe->filename))
+        .arg( addMe->cachedMetadata)
+        .arg( addMe->cachedCaptures));
     ui->progressBar->setValue(ui->progressBar->value() + 1);
     ui->processedFiles->setText(QStringLiteral("%1/%2").arg(ui->progressBar->value()).arg(ui->progressBar->maximum()));
     _videoList << addMe;
 }
 
-void MainWindow::removeVideo(Video *deleteMe)
+void MainWindow::removeVideo(Video *deleteMe, const QString &reason)
 {
-    addStatusMessage(QStringLiteral("[%1] ERROR reading %2").arg(QTime::currentTime().toString(),
-                                                                 QDir::toNativeSeparators(deleteMe->filename)));
+    addStatusMessage(QStringLiteral("[%1] ERROR reading %2: %3").arg(
+        QTime::currentTime().toString(), QDir::toNativeSeparators(deleteMe->filename), reason));
     ui->progressBar->setValue(ui->progressBar->value() + 1);
     ui->processedFiles->setText(QStringLiteral("%1/%2").arg(ui->progressBar->value()).arg(ui->progressBar->maximum()));
     _rejectedVideos << QDir::toNativeSeparators(deleteMe->filename);

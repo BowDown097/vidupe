@@ -1,6 +1,6 @@
 bin/
 opencv2/
-Vidupe.pro.user
+CMakeLists.txt.user
 *.autosave
 *.db
 ffmpeg.exe

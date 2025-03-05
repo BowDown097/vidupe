@@ -1,6 +1,7 @@
 #include <QMessageBox>
 #include <QWheelEvent>
 #include "comparison.h"
+#include "mainwindow.h"
 #include "ui_comparison.h"
 
 Comparison::Comparison(const QVector<Video *> &videosParam, const Prefs &prefsParam) :
@@ -9,10 +10,10 @@ Comparison::Comparison(const QVector<Video *> &videosParam, const Prefs &prefsPa
     ui = new Ui::Comparison;
     ui->setupUi(this);
 
-    connect(this, SIGNAL(sendStatusMessage(const QString &)), _prefs._mainwPtr, SLOT(addStatusMessage(const QString &)));
-    connect(this, SIGNAL(switchComparisonMode(const int &)),  _prefs._mainwPtr, SLOT(setComparisonMode(const int &)));
-    connect(this, SIGNAL(adjustThresholdSlider(const int &)), _prefs._mainwPtr, SLOT(on_thresholdSlider_valueChanged(const int &)));
-    connect(this, SIGNAL(adjustThresholdSliderMax(const int &)), _prefs._mainwPtr, SLOT(on_thresholdSliderMax_valueChanged(const int &)));
+    connect(this, &Comparison::sendStatusMessage, _prefs._mainwPtr, &MainWindow::addStatusMessage);
+    connect(this, &Comparison::switchComparisonMode,  _prefs._mainwPtr, &MainWindow::setComparisonMode);
+    connect(this, &Comparison::adjustThresholdSlider, _prefs._mainwPtr, &MainWindow::on_thresholdSlider_valueChanged);
+    connect(this, &Comparison::adjustThresholdSliderMax, _prefs._mainwPtr, &MainWindow::on_thresholdSliderMax_valueChanged);
 
     if(_prefs._comparisonMode == _prefs._SSIM)
         ui->selectSSIM->setChecked(true);
@@ -34,8 +35,8 @@ void Comparison::reportMatchingVideos()
     int foundMatches = 0;
 
     QVector<Video*>::const_iterator left, right, end = _videos.cend();
-    for(left=_videos.cbegin(); left<end; left++)
-        for(right=left+1; right<end; right++)
+    for(left=_videos.cbegin(); left<end; ++left)
+        for(right=left+1; right<end; ++right)
             if(bothVideosMatch(*left, *right))
             {   //smaller of two matching videos is likely the one to be deleted
                 combinedFilesize += std::min((*left)->size , (*right)->size);
@@ -82,9 +83,9 @@ void Comparison::on_prevVideo_clicked()
 {
     _seekForwards = false;
     QVector<Video*>::const_iterator left, right, begin = _videos.cbegin();
-    for(_rightVideo--, left=begin+_leftVideo; left>=begin; left--, _leftVideo--)
+    for(_rightVideo--, left=begin+_leftVideo; left>=begin; --left, _leftVideo--)
     {
-        for(right=begin+_rightVideo; right>left; right--, _rightVideo--)
+        for(right=begin+_rightVideo; right>left; --right, _rightVideo--)
             if(bothVideosMatch(*left, *right) && QFileInfo::exists((*left)->filename) && QFileInfo::exists((*right)->filename))
             {
                 showVideo(QStringLiteral("left"));
@@ -107,9 +108,9 @@ void Comparison::on_nextVideo_clicked()
     const int oldRight = _rightVideo;
 
     QVector<Video*>::const_iterator left, right, begin = _videos.cbegin(), end = _videos.cend();
-    for(left=begin+_leftVideo; left<end; left++, _leftVideo++)
+    for(left=begin+_leftVideo; left<end; ++left, _leftVideo++)
     {
-        for(_rightVideo++, right=begin+_rightVideo; right<end; right++, _rightVideo++)
+        for(_rightVideo++, right=begin+_rightVideo; right<end; ++right, _rightVideo++)
             if(bothVideosMatch(*left, *right) && QFileInfo::exists((*left)->filename) && QFileInfo::exists((*right)->filename))
             {
                 showVideo(QStringLiteral("left"));
@@ -236,7 +237,7 @@ void Comparison::showVideo(const QString &side) const
 QString Comparison::readableDuration(const int64_t &milliseconds) const
 {
     if(milliseconds == 0)
-        return QStringLiteral("");
+        return QString();
 
     const int hours   = milliseconds / (1000*60*60) % 24;
     const int minutes = milliseconds / (1000*60) % 60;
@@ -266,14 +267,14 @@ QString Comparison::readableFileSize(const int64_t &filesize) const
 QString Comparison::readableBitRate(const double &kbps) const
 {
     if(kbps == 0.0)
-        return QStringLiteral("");
+        return QString();
     return QStringLiteral("%1 kb/s").arg(kbps);
 }
 
 void Comparison::highlightBetterProperties() const
 {
-    ui->leftFileSize->setStyleSheet(QStringLiteral(""));
-    ui->rightFileSize->setStyleSheet(QStringLiteral(""));       //both filesizes within 100 kb
+    ui->leftFileSize->setStyleSheet(QString());
+    ui->rightFileSize->setStyleSheet(QString());       //both filesizes within 100 kb
     if(qAbs(_videos[_leftVideo]->size - _videos[_rightVideo]->size) <= 1024*100)
     {
         ui->leftFileSize->setStyleSheet(QStringLiteral("QLabel { color : peru; }"));
@@ -284,8 +285,8 @@ void Comparison::highlightBetterProperties() const
     else if(_videos[_leftVideo]->size < _videos[_rightVideo]->size)
         ui->rightFileSize->setStyleSheet(QStringLiteral("QLabel { color : green; }"));
 
-    ui->leftDuration->setStyleSheet(QStringLiteral(""));
-    ui->rightDuration->setStyleSheet(QStringLiteral(""));       //both runtimes within 1 second
+    ui->leftDuration->setStyleSheet(QString());
+    ui->rightDuration->setStyleSheet(QString());       //both runtimes within 1 second
     if(qAbs(_videos[_leftVideo]->duration - _videos[_rightVideo]->duration) <= 1000)
     {
         ui->leftDuration->setStyleSheet(QStringLiteral("QLabel { color : peru; }"));
@@ -296,8 +297,8 @@ void Comparison::highlightBetterProperties() const
     else if(_videos[_leftVideo]->duration < _videos[_rightVideo]->duration)
         ui->rightDuration->setStyleSheet(QStringLiteral("QLabel { color : green; }"));
 
-    ui->leftBitRate->setStyleSheet(QStringLiteral(""));
-    ui->rightBitRate->setStyleSheet(QStringLiteral(""));
+    ui->leftBitRate->setStyleSheet(QString());
+    ui->rightBitRate->setStyleSheet(QString());
     if(_videos[_leftVideo]->bitrate == _videos[_rightVideo]->bitrate)
     {
         ui->leftBitRate->setStyleSheet(QStringLiteral("QLabel { color : peru; }"));
@@ -308,8 +309,8 @@ void Comparison::highlightBetterProperties() const
     else if(_videos[_leftVideo]->bitrate < _videos[_rightVideo]->bitrate)
         ui->rightBitRate->setStyleSheet(QStringLiteral("QLabel { color : green; }"));
 
-    ui->leftFrameRate->setStyleSheet(QStringLiteral(""));
-    ui->rightFrameRate->setStyleSheet(QStringLiteral(""));      //both framerates within 0.1 fps
+    ui->leftFrameRate->setStyleSheet(QString());
+    ui->rightFrameRate->setStyleSheet(QString());      //both framerates within 0.1 fps
     if(qAbs(_videos[_leftVideo]->framerate - _videos[_rightVideo]->framerate) <= 0.1)
     {
         ui->leftFrameRate->setStyleSheet(QStringLiteral("QLabel { color : peru; }"));
@@ -320,8 +321,8 @@ void Comparison::highlightBetterProperties() const
     else if(_videos[_leftVideo]->framerate < _videos[_rightVideo]->framerate)
         ui->rightFrameRate->setStyleSheet(QStringLiteral("QLabel { color : green; }"));
 
-    ui->leftModified->setStyleSheet(QStringLiteral(""));
-    ui->rightModified->setStyleSheet(QStringLiteral(""));
+    ui->leftModified->setStyleSheet(QString());
+    ui->rightModified->setStyleSheet(QString());
     if(_videos[_leftVideo]->modified == _videos[_rightVideo]->modified)
     {
         ui->leftModified->setStyleSheet(QStringLiteral("QLabel { color : peru; }"));
@@ -332,8 +333,8 @@ void Comparison::highlightBetterProperties() const
     else if(_videos[_leftVideo]->modified > _videos[_rightVideo]->modified)
         ui->rightModified->setStyleSheet(QStringLiteral("QLabel { color : green; }"));
 
-    ui->leftResolution->setStyleSheet(QStringLiteral(""));
-    ui->rightResolution->setStyleSheet(QStringLiteral(""));
+    ui->leftResolution->setStyleSheet(QString());
+    ui->rightResolution->setStyleSheet(QString());
 
     if(_videos[_leftVideo]->width * _videos[_leftVideo]->height ==
        _videos[_rightVideo]->width * _videos[_rightVideo]->height)
@@ -488,7 +489,6 @@ void Comparison::on_swapFilenames_clicked() const
 void Comparison::on_swapFolders_clicked() const
 {
     const QFileInfo leftVideoFile(_videos[_leftVideo]->filename);
-    const QString leftPathname = leftVideoFile.absolutePath();
     const QString leftFilename = leftVideoFile.fileName();
     QDir leftDir = leftVideoFile.dir();
     const QString leftDirName = leftDir.dirName();
@@ -496,10 +496,9 @@ void Comparison::on_swapFolders_clicked() const
     const QDateTime oldLeftDatetime = _videos[_leftVideo]->modified;
 
 
-    leftDir.cdUp();
+    (void)leftDir.cdUp();
 
     const QFileInfo rightVideoFile(_videos[_rightVideo]->filename);
-    const QString rightPathname = rightVideoFile.absolutePath();
     const QString rightFilename = rightVideoFile.fileName();
     QDir rightDir = rightVideoFile.dir();
     const QString rightDirName = rightDir.dirName();
@@ -507,7 +506,7 @@ void Comparison::on_swapFolders_clicked() const
     const QDateTime oldRightDatetime = _videos[_rightVideo]->modified;
 
 
-    rightDir.cdUp();
+    (void)rightDir.cdUp();
 
     const QString tempLeftPath = QStringLiteral("%1/VidupeRenamedVideo").arg(leftDir.absolutePath());
     const QString newLeftPath = QStringLiteral("%1/%2").arg(leftDir.absolutePath(), rightDirName);
@@ -535,7 +534,6 @@ void Comparison::on_swapFolders_clicked() const
 void Comparison::on_swapFilesToFolders_clicked() const
 {
     const QFileInfo leftVideoFile(_videos[_leftVideo]->filename);
-    const QString leftPathname = leftVideoFile.absolutePath();
     const QString leftFilename = leftVideoFile.fileName();
     const QString leftNoExtension = leftFilename.left(leftFilename.lastIndexOf("."));
     const QString leftExtension = leftFilename.right(leftFilename.length() - leftFilename.lastIndexOf("."));
@@ -545,10 +543,9 @@ void Comparison::on_swapFilesToFolders_clicked() const
     const QString leftDirName = leftDir.dirName();
     const QString leftDirPath = leftDir.absolutePath();
 
-    leftDir.cdUp();
+    (void)leftDir.cdUp();
 
     const QFileInfo rightVideoFile(_videos[_rightVideo]->filename);
-    const QString rightPathname = rightVideoFile.absolutePath();
     const QString rightFilename = rightVideoFile.fileName();
     const QString rightNoExtension = rightFilename.left(rightFilename.lastIndexOf("."));
     const QString rightExtension = rightFilename.right(rightFilename.length() - rightFilename.lastIndexOf("."));
@@ -558,7 +555,7 @@ void Comparison::on_swapFilesToFolders_clicked() const
     const QString rightDirName = rightDir.dirName();
     const QString rightDirPath = rightDir.absolutePath();
 
-    rightDir.cdUp();
+    (void)rightDir.cdUp();
 
     const QString tempLeftPath = QStringLiteral("%1/VidupeRenamedVideo").arg(leftDir.absolutePath());
     const QString newLeftPath = QStringLiteral("%1/%2").arg(leftDir.absolutePath(), rightNoExtension);
@@ -640,10 +637,8 @@ void Comparison::on_thresholdSliderMax_valueChanged(const int &value)
         emit adjustThresholdSlider(ui->thresholdSliderMax->value() - 2);
     }
 }
-void Comparison::resizeEvent(QResizeEvent *event)
+void Comparison::resizeEvent(QResizeEvent*)
 {
-    Q_UNUSED(event)
-
     if(ui->leftFileName->text().isEmpty() || _leftVideo >= _prefs._numberOfVideos || _rightVideo >= _prefs._numberOfVideos)
         return;     //automatic initial resize event can happen before closing when values went over limit
 
@@ -671,14 +666,14 @@ void Comparison::wheelEvent(QWheelEvent *event)
     else
         return;
 
-    const int wmax = imagePtr->mapToGlobal(QPoint(imagePtr->pixmap()->width(), 0)).x();         //image right edge
-    const int hmax = imagePtr->mapToGlobal(QPoint(0, imagePtr->pixmap()->height())).y();        //image bottom edge
-    const double ratiox = 1-static_cast<double>(wmax-pos.x()) / imagePtr->pixmap()->width();    //mouse pos inside image
-    const double ratioy = 1-static_cast<double>(hmax-pos.y()) / imagePtr->pixmap()->height();
+    const int wmax = imagePtr->mapToGlobal(QPoint(imagePtr->pixmap().width(), 0)).x();         //image right edge
+    const int hmax = imagePtr->mapToGlobal(QPoint(0, imagePtr->pixmap().height())).y();        //image bottom edge
+    const double ratiox = 1-static_cast<double>(wmax-pos.x()) / imagePtr->pixmap().width();    //mouse pos inside image
+    const double ratioy = 1-static_cast<double>(hmax-pos.y()) / imagePtr->pixmap().height();
 
-    const int widescreenBlack = (imagePtr->height() - imagePtr->pixmap()->height()) / 2;
+    const int widescreenBlack = (imagePtr->height() - imagePtr->pixmap().height()) / 2;
     const int imgTop = imagePtr->mapToGlobal(QPoint(0,0)).y() + widescreenBlack;
-    const int imgBtm = imgTop + imagePtr->pixmap()->height();
+    const int imgBtm = imgTop + imagePtr->pixmap().height();
     if(pos.x() > wmax || pos.y() < imgTop || pos.y() > imgBtm)      //image is smaller than label underneath
         return;
 
@@ -706,9 +701,9 @@ void Comparison::wheelEvent(QWheelEvent *event)
         return;
     }
 
-    if(event->delta() > 0 && _zoomLevel < 10)   //mouse wheel up
+    if(event->angleDelta().y() > 0 && _zoomLevel < 10)   //mouse wheel up
         _zoomLevel = _zoomLevel * 2;
-    if(event->delta() < 0 && _zoomLevel > 1)    //mouse wheel down
+    if(event->angleDelta().y() < 0 && _zoomLevel > 1)    //mouse wheel down
         _zoomLevel = _zoomLevel / 2;
 
     QPixmap pix;

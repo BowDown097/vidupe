@@ -1,20 +1,22 @@
 #include <QPainter>
+#include <QRegularExpression>
 #include "video.h"
+#include "osutils.h"
+#include "mainwindow.h"
 
 Prefs Video::_prefs;
 int Video::_jpegQuality = _okJpegQuality;
 
-Video::Video(const Prefs &prefsParam, const QString &filenameParam, const QDateTime &dateModParam) : filename(filenameParam)
+Video::Video(const Prefs &prefsParam, const QString &filenameParam, const QDateTime &dateModParam)
+    : filename(filenameParam), modified(dateModParam)
 {
     _prefs = prefsParam;
-    modified = dateModParam;
-    filename = filenameParam;
     id = Db::uniqueId(filenameParam, modified, "");
     if(_prefs._numberOfVideos > _hugeAmountVideos)       //save memory to avoid crash due to 32 bit limit
         _jpegQuality = _lowJpegQuality;
 
-    QObject::connect(this, SIGNAL(rejectVideo(Video *)), _prefs._mainwPtr, SLOT(removeVideo(Video *)));
-    QObject::connect(this, SIGNAL(acceptVideo(Video *)), _prefs._mainwPtr, SLOT(addVideo(Video *)));
+    connect(this, &Video::rejectVideo, _prefs._mainwPtr, &MainWindow::removeVideo);
+    connect(this, &Video::acceptVideo, _prefs._mainwPtr, &MainWindow::addVideo);
 }
 
 void Video::run()
@@ -23,35 +25,69 @@ void Video::run()
     if(!cachedMetadata)      //check first if video properties are cached
     {
         getMetadata(filename);          //if not, read them with ffmpeg
-        cache.writeMetadata(*this);
         cachedMetadata = false;
     }
     if(width == 0 || height == 0 || duration == 0)
     {
-        emit rejectVideo(this);
+        emit rejectVideo(this,
+            QStringLiteral("Reading properties failed. width: %1 height: %2 duration: %3")
+                .arg(width).arg(height).arg(duration));
         return;
     }
 
-    const int ret = takeScreenCaptures(cache);
-    if(ret == _failure)
-        emit rejectVideo(this);
+    const Video::ScreenCaptureResult ret = takeScreenCaptures(cache);
+    if(ret == Video::ScreenCaptureResult::NoFrame)
+    {
+        emit rejectVideo(this, "Taking screen captures failed: no frame");
+    }
+    else if (ret == Video::ScreenCaptureResult::Exception)
+    {
+        emit rejectVideo(this, "Taking screen captures failed: cv exception");
+    }
+    else if (ret == Video::ScreenCaptureResult::ResolutionMismatch)
+    {
+        emit rejectVideo(this, "Taking screen captures failed: resolution mismatch");
+    }
     else if((_prefs._thumbnails != cutEnds && hash[0] == 0 ) ||
             (_prefs._thumbnails == cutEnds && hash[0] == 0 && hash[4] == 0))   //all screen captures black
-        emit rejectVideo(this);
+    {
+        emit rejectVideo(this, "All screen captures are black");
+    }
     else
+    {
+        cache.writeMetadata(*this);
         emit acceptVideo(this);
+    }
 }
 
 void Video::getMetadata(const QString &filename)
 {
+    const QString ffmpegPath = OSUtils::getFullPath(QFileInfo("ffmpeg"));
+    if (ffmpegPath.isEmpty())
+    {
+        emit rejectVideo(this, "Could not find ffmpeg");
+        return;
+    }
+
     QProcess probe;
     probe.setProcessChannelMode(QProcess::MergedChannels);
-    probe.start(QStringLiteral("ffmpeg -hide_banner -i \"%1\"").arg(QDir::toNativeSeparators(filename)));
-    probe.waitForFinished();
+    probe.startCommand(QStringLiteral("%1 -hide_banner -i \"%2\"").arg(ffmpegPath, QDir::toNativeSeparators(filename)));
+    bool success = probe.waitForFinished();
+
+    if (!success)
+    {
+        if (const QString errorString = probe.errorString(); !errorString.isEmpty())
+            emit rejectVideo(this, "ffmpeg process failed: " + errorString);
+        else
+            emit rejectVideo(this, "ffmpeg process failed");
+    }
 
     bool rotatedOnce = false;
     const QString analysis(probe.readAllStandardOutput());
-    const QStringList analysisLines = analysis.split(QStringLiteral("\r\n"));
+
+    static QRegularExpression newline("[\r\n]");
+    const QStringList analysisLines = analysis.split(newline, Qt::SkipEmptyParts);
+
     for(auto line : analysisLines)
     {
         if(line.contains(QStringLiteral(" Duration:")))
@@ -61,10 +97,11 @@ void Video::getMetadata(const QString &filename)
                 duration = 0;
             else
             {
-                const int h  = time.midRef(0,2).toInt();
-                const int m  = time.midRef(3,2).toInt();
-                const int s  = time.midRef(6,2).toInt();
-                const int ms = time.midRef(9,2).toInt();
+                QStringView timeView(time);
+                const int h  = timeView.sliced(0,2).toInt();
+                const int m  = timeView.sliced(3,2).toInt();
+                const int s  = timeView.sliced(6,2).toInt();
+                const int ms = timeView.sliced(9,2).toInt();
                 duration = h*60*60*1000 + m*60*1000 + s*1000 + ms*10;
             }
             bitrate = line.split(QStringLiteral("bitrate: ")).value(1).split(QStringLiteral(" ")).value(0).toInt();
@@ -72,8 +109,9 @@ void Video::getMetadata(const QString &filename)
         if(line.contains(QStringLiteral(" Video:")) &&
           (line.contains(QStringLiteral("kb/s")) || line.contains(QStringLiteral(" fps")) || analysis.count(" Video:") == 1))
         {
-            line.replace(QRegExp(QStringLiteral("\\([^\\)]+\\)")), QStringLiteral(""));
-            codec = line.split(QStringLiteral(" ")).value(7).replace(QStringLiteral(","), QStringLiteral(""));
+            static QRegularExpression regex("\\([^\\)]+\\)");
+            line.replace(regex, QString());
+            codec = line.split(QStringLiteral(" ")).value(7).replace(QStringLiteral(","), QString());
             const QString resolution = line.split(QStringLiteral(",")).value(2);
             width = static_cast<short>(resolution.split(QStringLiteral("x")).value(0).toInt());
             height = static_cast<short>(resolution.split(QStringLiteral("x")).value(1).split(QStringLiteral(" ")).value(0).toInt());
@@ -116,10 +154,10 @@ void Video::getMetadata(const QString &filename)
     size = videoFile.size();
 }
 
-int Video::takeScreenCaptures(const Db &cache)
+Video::ScreenCaptureResult Video::takeScreenCaptures(const Db &cache)
 {
     Thumbnail thumb(_prefs._thumbnails);
-    QImage thumbnail(thumb.cols() * width, thumb.rows() * height, QImage::Format_RGB888);
+    QImage thumbnailImage(thumb.cols() * width, thumb.rows() * height, QImage::Format_RGB888);
     const QVector<int> percentages = thumb.percentages();
     int capture = percentages.count();
     int ofDuration = 100;
@@ -151,14 +189,14 @@ int Video::takeScreenCaptures(const Db &cache)
                     capture = percentages.count();
                     continue;
                 }
-                return _failure;
+                return ScreenCaptureResult::NoFrame;
             }
             writeToCache = true;
         }
         if(frame.width() > width || frame.height() > height)    //metadata parsing error or variable resolution
-            return _failure;
+            return ScreenCaptureResult::ResolutionMismatch;
 
-        QPainter painter(&thumbnail);                           //copy captured frame into right place in thumbnail
+        QPainter painter(&thumbnailImage);                           //copy captured frame into right place in thumbnail
         painter.drawImage(capture % thumb.cols() * width, capture / thumb.cols() * height, frame);
 
         if(writeToCache)
@@ -171,30 +209,30 @@ int Video::takeScreenCaptures(const Db &cache)
 
     const int hashes = _prefs._thumbnails == cutEnds? 16 : 1;    //if cutEnds mode: separate hash for beginning and end
     try {
-        processThumbnail(thumbnail, hashes);
-    } catch (std::exception &e) {
-        return _failure;
+        processThumbnail(thumbnailImage, hashes);
+    } catch (const std::exception &e) {
+        return ScreenCaptureResult::Exception;
     }
 
-    return _success;
+    return ScreenCaptureResult::Success;
 }
 
 void Video::processThumbnail(QImage &thumbnail, const int &hashes)
 {
-    for(int hash=0; hash<hashes; hash++)
+    for(int h=0; h<hashes; h++)
     {
         QImage image = thumbnail;
-        int y = hash / 4;
-        int x = hash % 4;
+        int y = h / 4;
+        int x = h % 4;
         if(_prefs._thumbnails == cutEnds)           //if cutEnds mode: separate thumbnail into first and last frames
             image = thumbnail.copy(x, y, thumbnail.width()/4, thumbnail.height()/4);
 
         cv::Mat mat = cv::Mat(image.height(), image.width(), CV_8UC3, image.bits(), static_cast<uint>(image.bytesPerLine()));
-        this->hash[hash] = computePhash(mat);                           //pHash
+        this->hash[h] = computePhash(mat);                           //pHash
 
         cv::resize(mat, mat, cv::Size(_ssimSize, _ssimSize), 0, 0, cv::INTER_AREA);
-        cv::cvtColor(mat, grayThumb[hash], cv::COLOR_BGR2GRAY);
-        grayThumb[hash].cv::Mat::convertTo(grayThumb[hash], CV_32F);    //ssim
+        cv::cvtColor(mat, grayThumb[h], cv::COLOR_BGR2GRAY);
+        grayThumb[h].cv::Mat::convertTo(grayThumb[h], CV_32F);    //ssim
     }
 
     thumbnail = minimizeImage(thumbnail);
@@ -225,14 +263,14 @@ uint64_t Video::computePhash(const cv::Mat &input) const
     const float firstElement = *reinterpret_cast<float*>(topLeftDCT.data);      //compute avg but skip first element
     const float average = (static_cast<float>(cv::sum(topLeftDCT)[0]) - firstElement) / 63;         //(it's very big)
 
-    uint64_t hash = 0;
+    uint64_t outHash = 0;
     float* transform = reinterpret_cast<float*>(topLeftDCT.data);
     const float* endOfData = transform + 64;
     for(int i=0; transform<endOfData; i++, transform++)             //construct hash from all 8x8 bits
         if(*transform > average)
-            hash |= 1ULL << i;                                      //larger than avg = 1, smaller than avg = 0
+            outHash |= 1ULL << i;                                      //larger than avg = 1, smaller than avg = 0
 
-    return hash;
+    return outHash;
 }
 
 QImage Video::minimizeImage(const QImage &image) const
@@ -278,10 +316,12 @@ QImage Video::captureAt(const int &percent, const int &ofDuration) const
 
     const QString screenshot = QStringLiteral("%1/vidupe%2.bmp").arg(tempDir.path()).arg(percent);
     QProcess ffmpeg;
-    const QString ffmpegCommand = QStringLiteral("ffmpeg -ss %1 -i \"%2\" -an -frames:v 1 -pix_fmt rgb24 %3")
-                                  .arg(msToHHMMSS(duration * (percent * ofDuration) / (100 * 100)),
-                                  QDir::toNativeSeparators(filename), QDir::toNativeSeparators(screenshot));
-    ffmpeg.start(ffmpegCommand);
+    const QString ffmpegCommand = QStringLiteral("%1 -ss %2 -i \"%3\" -an -frames:v 1 -pix_fmt rgb24 %4")
+                                  .arg(OSUtils::getFullPath(QFileInfo("ffmpeg")),
+                                       msToHHMMSS(duration * (percent * ofDuration) / (100 * 100)),
+                                       QDir::toNativeSeparators(filename),
+                                       QDir::toNativeSeparators(screenshot));
+    ffmpeg.startCommand(ffmpegCommand);
     ffmpeg.waitForFinished(10000);
 
     const QImage img(screenshot, "BMP");
@@ -289,7 +329,7 @@ QImage Video::captureAt(const int &percent, const int &ofDuration) const
     return img;
 }
 
-void Video::getBrightest(QString &filename)
+void Video::getBrightest(const QString &filename)
 {
     const char* videofilename = "StopMoti2001.mpeg";
 
@@ -297,7 +337,7 @@ void Video::getBrightest(QString &filename)
     cv::VideoCapture cap(videofilename); // open a video file
     if(!cap.isOpened())  // check if succeeded
     {
-        std::cout << "file " << filename.toStdString() << " not found or could not be opened" << std::endl;
+        qDebug() << "file " << filename.toStdString() << " not found or could not be opened";
         return;
     }
 
@@ -313,10 +353,10 @@ void Video::getBrightest(QString &filename)
 
 
         // adjust the filename by incrementing a counter
-        std::stringstream filename (std::stringstream::in | std::stringstream::out);
-        filename << "image" <<  counter++ << ".jpg";
+        std::stringstream fileStream (std::stringstream::in | std::stringstream::out);
+        fileStream << "image" <<  counter++ << ".jpg";
 
-        std::cout << "writing " << filename.str().c_str() << " to disk" << std::endl;
+        qDebug() << "writing " << fileStream.str() << " to disk";
 
         // save frame to file: image0.jpg, image1.jpg, and so on...
         //cv::imwrite(filename.str().c_str(),frame);

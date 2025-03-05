@@ -9,12 +9,9 @@
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
-#include "opencv2/video.hpp"
 #include <opencv2/highgui.hpp>
 #include "prefs.h"
 #include "db.h"
-#include <stdio.h>
-#include <iostream>
 
 class Video : public QObject, public QRunnable
 {
@@ -41,27 +38,17 @@ public:
     bool cachedMetadata = false;
     bool cachedCaptures = true;
 
-private slots:
-    void getMetadata(const QString &filename);
-    int takeScreenCaptures(const Db &cache);
-    void processThumbnail(QImage &thumbnail, const int &hashes);
-    uint64_t computePhash(const cv::Mat &input) const;
-    QImage minimizeImage(const QImage &image) const;
-    QString msToHHMMSS(const int64_t &time) const;
-    void getBrightest(QString &filename);
-
-public slots:
     QImage captureAt(const int &percent, const int &ofDuration=100) const;
 
 signals:
-    void acceptVideo(Video *addMe) const;
-    void rejectVideo(Video *deleteMe) const;
+    void acceptVideo(Video *addMe);
+    void rejectVideo(Video *deleteMe, const QString &reason);
 
 private:
     static Prefs _prefs;
     static int _jpegQuality;
 
-    enum _returnValues { _success, _failure };
+    enum class ScreenCaptureResult { Success, NoFrame, ResolutionMismatch, Exception };
 
     static constexpr int _okJpegQuality      = 60;
     static constexpr int _lowJpegQuality     = 25;
@@ -73,6 +60,15 @@ private:
     static constexpr int _pHashSize          = 32;      //phash generated from 32x32 image
     static constexpr int _ssimSize           = 16;      //larger than 16x16 seems to have slower comparison
     static constexpr int _almostBlackBitmap  = 1500;    //monochrome thumbnail if less shades of gray than this
+
+    uint64_t computePhash(const cv::Mat &input) const;
+    QImage minimizeImage(const QImage &image) const;
+    QString msToHHMMSS(const int64_t &time) const;
+
+    void getMetadata(const QString &filename);
+    ScreenCaptureResult takeScreenCaptures(const Db &cache);
+    void processThumbnail(QImage &thumbnail, const int &hashes);
+    void getBrightest(const QString &filename);
 };
 
 #endif // VIDEO_H
